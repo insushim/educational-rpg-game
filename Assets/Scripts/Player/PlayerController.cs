@@ -1,108 +1,110 @@
 using UnityEngine;
-using UnityEngine.AI;
 
 namespace EducationalRPG.Player
 {
-    /// <summary>
-    /// 플레이어 이동을 제어하는 컨트롤러
-    /// 마우스 클릭으로 이동 (리니지 스타일)
-    /// </summary>
-    [RequireComponent(typeof(NavMeshAgent))]
+    [RequireComponent(typeof(CharacterController))]
     public class PlayerController : MonoBehaviour
     {
         [Header("Movement Settings")]
         [SerializeField] private float moveSpeed = 5f;
+        [SerializeField] private float runSpeed = 8f;
         [SerializeField] private float rotationSpeed = 10f;
-
-        private NavMeshAgent navAgent;
-        private Camera mainCamera;
-        private Animator animator;
+        
+        [Header("Animation")]
+        [SerializeField] private Animator animator;
+        
+        private CharacterController characterController;
+        private Vector3 moveDirection;
+        private bool isRunning;
+        
+        private static readonly int SpeedHash = Animator.StringToHash("Speed");
+        private static readonly int IsRunningHash = Animator.StringToHash("IsRunning");
 
         private void Awake()
         {
-            navAgent = GetComponent<NavMeshAgent>();
-            mainCamera = Camera.main;
-            animator = GetComponent<Animator>();
-
-            // NavMeshAgent 설정
-            navAgent.speed = moveSpeed;
-            navAgent.angularSpeed = rotationSpeed * 100f;
+            characterController = GetComponent<CharacterController>();
+            
+            if (animator == null)
+            {
+                animator = GetComponentInChildren<Animator>();
+            }
         }
 
         private void Update()
         {
-            HandleMouseInput();
+            HandleInput();
+            Move();
+            Rotate();
             UpdateAnimation();
         }
 
-        /// <summary>
-        /// 마우스 클릭 입력 처리
-        /// </summary>
-        private void HandleMouseInput()
+        private void HandleInput()
         {
-            // 마우스 왼쪽 버튼 클릭
-            if (Input.GetMouseButtonDown(0))
+            float horizontal = Input.GetAxisRaw("Horizontal");
+            float vertical = Input.GetAxisRaw("Vertical");
+            
+            isRunning = Input.GetKey(KeyCode.LeftShift);
+            
+            Camera mainCamera = Camera.main;
+            if (mainCamera != null)
             {
-                Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
-                RaycastHit hit;
-
-                // 지면 클릭 감지
-                if (Physics.Raycast(ray, out hit))
-                {
-                    // 몬스터가 아닌 경우에만 이동
-                    if (hit.collider.CompareTag("Ground"))
-                    {
-                        MoveToPosition(hit.point);
-                    }
-                }
+                Vector3 forward = mainCamera.transform.forward;
+                Vector3 right = mainCamera.transform.right;
+                
+                forward.y = 0f;
+                right.y = 0f;
+                forward.Normalize();
+                right.Normalize();
+                
+                moveDirection = (forward * vertical + right * horizontal).normalized;
+            }
+            else
+            {
+                moveDirection = new Vector3(horizontal, 0f, vertical).normalized;
             }
         }
 
-        /// <summary>
-        /// 특정 위치로 이동
-        /// </summary>
-        public void MoveToPosition(Vector3 targetPosition)
+        private void Move()
         {
-            navAgent.SetDestination(targetPosition);
+            if (moveDirection.magnitude < 0.1f) return;
+            
+            float currentSpeed = isRunning ? runSpeed : moveSpeed;
+            Vector3 motion = moveDirection * currentSpeed * Time.deltaTime;
+            
+            if (!characterController.isGrounded)
+            {
+                motion.y = -9.81f * Time.deltaTime;
+            }
+            
+            characterController.Move(motion);
         }
 
-        /// <summary>
-        /// 이동 중지
-        /// </summary>
-        public void StopMovement()
+        private void Rotate()
         {
-            navAgent.ResetPath();
+            if (moveDirection.magnitude < 0.1f) return;
+            
+            Quaternion targetRotation = Quaternion.LookRotation(moveDirection);
+            transform.rotation = Quaternion.Slerp(
+                transform.rotation, 
+                targetRotation, 
+                rotationSpeed * Time.deltaTime
+            );
         }
 
-        /// <summary>
-        /// 애니메이션 업데이트
-        /// </summary>
         private void UpdateAnimation()
         {
             if (animator == null) return;
-
-            // 이동 속도에 따라 애니메이션 설정
-            float speed = navAgent.velocity.magnitude;
-            animator.SetFloat("Speed", speed);
-            animator.SetBool("IsMoving", speed > 0.1f);
+            
+            float speed = moveDirection.magnitude;
+            animator.SetFloat(SpeedHash, speed);
+            animator.SetBool(IsRunningHash, isRunning && speed > 0.1f);
         }
 
-        /// <summary>
-        /// 현재 이동 중인지 확인
-        /// </summary>
-        public bool IsMoving()
+        public void MoveToPosition(Vector3 targetPosition)
         {
-            return navAgent.hasPath && navAgent.remainingDistance > navAgent.stoppingDistance;
-        }
-
-        private void OnDrawGizmos()
-        {
-            // 에디터에서 목적지 시각화
-            if (navAgent != null && navAgent.hasPath)
-            {
-                Gizmos.color = Color.green;
-                Gizmos.DrawWireSphere(navAgent.destination, 0.5f);
-            }
+            Vector3 direction = (targetPosition - transform.position).normalized;
+            direction.y = 0f;
+            moveDirection = direction;
         }
     }
 }
