@@ -1,115 +1,143 @@
-using UnityEngine;
+using System.Collections;
 using System.Collections.Generic;
+using UnityEngine;
+using EducationalRPG.World;
 
 namespace EducationalRPG.Enemy
 {
+    // Spawns monsters based on HuntingGroundData and MonsterDatabase
     public class MonsterSpawner : MonoBehaviour
     {
-        [Header("Spawn Settings")]
-        [SerializeField] private GameObject monsterPrefab;
-        [SerializeField] private int maxMonsters = 5;
-        [SerializeField] private float spawnRadius = 10f;
-        [SerializeField] private float respawnTime = 30f;
-        
-        [Header("Monster Settings")]
-        [SerializeField] private int monsterLevel = 1;
-        [SerializeField] private int expReward = 50;
-        
-        [Header("Spawn Area")]
-        [SerializeField] private Vector3 spawnCenter;
-        [SerializeField] private bool useTransformAsCenter = true;
-        
-        private List<GameObject> activeMonsters = new List<GameObject>();
-        private List<float> respawnTimers = new List<float>();
+        [Header("Databases")]
+        public MonsterDatabase monsterDatabase;
+        public HuntingGroundDatabase huntingGroundDatabase;
+
+        [Header("Spawner Settings")]
+        public int minSpawn = 3;
+        public int maxSpawn = 8;
+        public float spawnInterval = 20f; // seconds between waves
+        [Range(0,100)] public int eliteChancePercent = 12; // chance (0-100) to spawn an elite instead of normal
+        [Range(0,100)] public int championChancePercent = 3; // chance to spawn champion variant
+        [Range(0,100)] public int roamingBossChancePercent = 2; // chance for a roaming boss per wave
+
+        [Header("References")]
+        public int huntingGroundIndex = 0; // which hunting ground to use from DB
+        public List<Transform> spawnPoints = new List<Transform>();
+
+        private HuntingGroundData groundData;
 
         private void Start()
         {
-            if (useTransformAsCenter)
+            if (huntingGroundDatabase != null && huntingGroundDatabase.huntingGrounds.Count > huntingGroundIndex)
+                groundData = huntingGroundDatabase.huntingGrounds[huntingGroundIndex];
+            else
+                Debug.LogWarning("Hunting ground database or index invalid in MonsterSpawner.");
+
+            if (monsterDatabase == null)
+                Debug.LogWarning("MonsterDatabase not assigned in MonsterSpawner.");
+
+            StartCoroutine(SpawnLoop());
+        }
+
+        private IEnumerator SpawnLoop()
+        {
+            while (true)
             {
-                spawnCenter = transform.position;
-            }
-            
-            for (int i = 0; i < maxMonsters; i++)
-            {
-                SpawnMonster();
+                SpawnWave();
+                yield return new WaitForSeconds(spawnInterval);
             }
         }
 
-        private void Update()
+        private void SpawnWave()
         {
-            for (int i = respawnTimers.Count - 1; i >= 0; i--)
+            if (monsterDatabase == null || groundData == null) return;
+
+            int toSpawn = Random.Range(minSpawn, maxSpawn + 1);
+            for (int i = 0; i < toSpawn; i++)
             {
-                respawnTimers[i] -= Time.deltaTime;
-                
-                if (respawnTimers[i] <= 0f)
+                SpawnOne();
+            }
+
+            // occasional roaming boss spawn (rare)
+            if (groundData.hasBoss && Random.Range(0, 100) < roamingBossChancePercent)
+            {
+                SpawnBossByName(groundData.bossName);
+            }
+        }
+
+        private void SpawnOne()
+        {
+            Transform sp = spawnPoints.Count > 0 ? spawnPoints[Random.Range(0, spawnPoints.Count)] : transform;
+            if (groundData.monsterTypes == null || groundData.monsterTypes.Count == 0) return;
+
+            string chosenName = groundData.monsterTypes[Random.Range(0, groundData.monsterTypes.Count)];
+            // Find candidates by name (could be multiple variants)
+            List<MonsterData> candidates = monsterDatabase.monsters.FindAll(m => m.monsterName == chosenName);
+
+            if (candidates.Count == 0)
+            {
+                // fallback: choose any monster in level range
+                candidates = monsterDatabase.monsters.FindAll(m => m.level >= groundData.minLevel && m.level <= groundData.maxLevel && m.rank == MonsterRank.Normal);
+                if (candidates.Count == 0) return;
+            }
+
+            MonsterData baseMonster = candidates[Random.Range(0, candidates.Count)];
+            MonsterData spawnData = baseMonster;
+
+            // chance to upgrade to champion/elite
+            int roll = Random.Range(0, 100);
+            if (roll < championChancePercent)
+            {
+                MonsterData champion = monsterDatabase.monsters.Find(m => m.rank == MonsterRank.Elite && Mathf.Abs(m.level - baseMonster.level) <= 4);
+                if (champion != null) spawnData = champion;
+            }
+            else if (roll < eliteChancePercent + championChancePercent)
+            {
+                MonsterData elite = monsterDatabase.monsters.Find(m => m.rank == MonsterRank.Elite && Mathf.Abs(m.level - baseMonster.level) <= 3);
+                if (elite != null) spawnData = elite;
+            }
+
+            if (spawnData.prefab != null)
+            {
+                Vector3 pos = sp.position + Random.insideUnitSphere * 3f;
+                pos.y = sp.position.y;
+                GameObject go = Instantiate(spawnData.prefab, pos, Quaternion.identity);
+                var monsterAI = go.GetComponent<MonsterAI>();
+                if (monsterAI != null)
                 {
-                    SpawnMonster();
-                    respawnTimers.RemoveAt(i);
+                    monsterAI.InitializeFromData(spawnData);
                 }
             }
-        }
-
-        private void SpawnMonster()
-        {
-            if (activeMonsters.Count >= maxMonsters) return;
-            
-            Vector3 spawnPosition = GetRandomSpawnPosition();
-            GameObject monster = Instantiate(monsterPrefab, spawnPosition, Quaternion.identity);
-            
-            var combatStats = monster.GetComponent<Combat.CombatStats>();
-            if (combatStats != null)
+            else
             {
-                combatStats.OnDeath.AddListener(() => OnMonsterDeath(monster));
-            }
-            
-            var monsterData = monster.GetComponent<MonsterData>();
-            if (monsterData != null)
-            {
-                monsterData.SetLevel(monsterLevel);
-                monsterData.SetExpReward(expReward);
-            }
-            
-            activeMonsters.Add(monster);
-            Debug.Log($"Monster spawned at {spawnPosition}. Active: {activeMonsters.Count}/{maxMonsters}");
-        }
-
-        private void OnMonsterDeath(GameObject monster)
-        {
-            if (activeMonsters.Contains(monster))
-            {
-                activeMonsters.Remove(monster);
-                respawnTimers.Add(respawnTime);
-                Debug.Log($"Monster died. Respawn in {respawnTime}s. Active: {activeMonsters.Count}/{maxMonsters}");
+                Debug.LogWarning($"SpawnData for {spawnData.monsterName} has no prefab assigned.");
             }
         }
 
-        private Vector3 GetRandomSpawnPosition()
+        private void SpawnBossByName(string bossName)
         {
-            Vector2 randomCircle = Random.insideUnitCircle * spawnRadius;
-            Vector3 randomPosition = spawnCenter + new Vector3(randomCircle.x, 0f, randomCircle.y);
-            
-            UnityEngine.AI.NavMeshHit hit;
-            if (UnityEngine.AI.NavMesh.SamplePosition(randomPosition, out hit, spawnRadius, UnityEngine.AI.NavMesh.AllAreas))
+            MonsterData boss = monsterDatabase.monsters.Find(m => m.monsterName == bossName && (m.rank == MonsterRank.Boss || m.rank == MonsterRank.WorldBoss));
+            if (boss == null)
             {
-                return hit.position;
+                Debug.LogWarning($"Boss {bossName} not found in MonsterDatabase.");
+                return;
             }
-            
-            return randomPosition;
-        }
 
-        private void OnDrawGizmosSelected()
-        {
-            Vector3 center = useTransformAsCenter ? transform.position : spawnCenter;
-            
-            Gizmos.color = Color.cyan;
-            Gizmos.DrawWireSphere(center, spawnRadius);
-            
-            Gizmos.color = Color.green;
-            for (int i = 0; i < maxMonsters; i++)
+            Transform sp = spawnPoints.Count > 0 ? spawnPoints[Random.Range(0, spawnPoints.Count)] : transform;
+            Vector3 pos = sp.position;
+
+            if (boss.prefab != null)
             {
-                float angle = (360f / maxMonsters) * i;
-                Vector3 pos = center + Quaternion.Euler(0f, angle, 0f) * Vector3.forward * (spawnRadius * 0.5f);
-                Gizmos.DrawWireSphere(pos, 0.5f);
+                GameObject go = Instantiate(boss.prefab, pos, Quaternion.identity);
+                var bossComp = go.GetComponent<BossMonster>();
+                if (bossComp != null)
+                {
+                    bossComp.StartCombat();
+                }
+            }
+            else
+            {
+                Debug.LogWarning($"Boss {bossName} prefab not assigned.");
             }
         }
     }
