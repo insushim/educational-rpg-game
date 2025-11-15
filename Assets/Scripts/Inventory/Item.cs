@@ -36,6 +36,7 @@ namespace EducationalRPG.Inventory
         public float buffDuration = 0f;
         public float attackBuffMultiplier = 1f;
         public float defenseBuffMultiplier = 1f;
+        public float attackSpeedBuffMultiplier = 1f; // NEW: 공격 속도 증가 배율
 
         [Header("Equipment Bonuses")]
         public int attackBonus = 0;
